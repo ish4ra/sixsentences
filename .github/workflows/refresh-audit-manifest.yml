@@ -1,0 +1,109 @@
+name: Validate local export audit fix
+
+on:
+  push:
+    branches: [tmp/refresh-audit-manifest]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out contribution branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: fix/audit-local-venv
+          fetch-depth: 0
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+          version: "0.10.12"
+
+      - name: Create the documented local environment
+        run: uv sync --project services/api --frozen --extra dev
+
+      - name: Refresh the changed audit-script manifest entry
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          root = Path("services/api")
+          script = root / "scripts/audit_community_export.py"
+          data = script.read_bytes()
+          manifest_path = root / "COMMUNITY_EXPORT_MANIFEST.json"
+          payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+          for entry in payload["files"]:
+              if entry["path"] == "scripts/audit_community_export.py":
+                  entry["bytes"] = len(data)
+                  entry["sha256"] = hashlib.sha256(data).hexdigest()
+                  break
+          else:
+              raise SystemExit("audit script is missing from the community export manifest")
+
+          manifest_path.write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(f"audit script bytes: {len(data)}")
+          print(f"audit script sha256: {hashlib.sha256(data).hexdigest()}")
+          PY
+
+      - name: Verify ignored virtualenvs do not weaken symlink rejection
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import tempfile
+          from pathlib import Path
+
+          script = Path("services/api/scripts/audit_community_export.py")
+          spec = importlib.util.spec_from_file_location("audit_community_export", script)
+          if spec is None or spec.loader is None:
+              raise SystemExit("could not load audit module")
+          module = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(module)
+
+          with tempfile.TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              (root / "src").mkdir()
+              (root / "src" / "ok.py").write_text("ok\n", encoding="utf-8")
+
+              for env_dir in (".venv", "venv"):
+                  bin_dir = root / env_dir / "bin"
+                  bin_dir.mkdir(parents=True)
+                  (bin_dir / "python").symlink_to("/usr/bin/python3")
+
+              files = module.included_files(root)
+              relative = [path.relative_to(root).as_posix() for path in files]
+              assert relative == ["src/ok.py"], relative
+
+              (root / "unsafe-link").symlink_to("/usr/bin/python3")
+              try:
+                  module.included_files(root)
+              except RuntimeError as exc:
+                  assert str(exc) == "symlink:unsafe-link", exc
+              else:
+                  raise AssertionError("symlink outside ignored directories was accepted")
+          PY
+
+      - name: Run the documented local audit
+        run: uv run --project services/api python services/api/scripts/audit_community_export.py services/api
+
+      - name: Commit the refreshed manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/api/COMMUNITY_EXPORT_MANIFEST.json
+          if git diff --cached --quiet; then
+            echo "Manifest already matches the changed script."
+          else
+            git commit -m "chore(audit): refresh community export manifest"
+            git push origin HEAD:fix/audit-local-venv
+          fi
