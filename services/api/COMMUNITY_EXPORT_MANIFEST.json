@@ -115,10 +115,10 @@
       "sha256": "7918b810601db56cf0fcd7028aada0259b86aea62bbe0fabcd99abee9287f85f"
     },
     {
-      "bytes": 13588,
+      "bytes": 13636,
       "mode": "0644",
       "path": "scripts/audit_community_export.py",
-      "sha256": "49dac3a6d4d4bc55d8da2e63a30117fcffee3f7d38d098f06c54b0ee2c352cb6"
+      "sha256": "bd617752421265f901bab1f6d9f6d19ca1720bdde72c00091e401ac7bc14844f"
     },
     {
       "bytes": 9906,
